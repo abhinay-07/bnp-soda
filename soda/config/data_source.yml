@@ -1,0 +1,24 @@
+# ============================================
+# Soda Core Data Source Configuration
+# KYC Data Quality Platform
+# ============================================
+
+data_source kyc_postgres:
+  type: postgres
+  host: ${POSTGRES_HOST}
+  port: ${POSTGRES_PORT}
+  username: ${POSTGRES_USER}
+  password: ${POSTGRES_PASSWORD}
+  database: ${POSTGRES_DB}
+  schema: public
+  
+  # Connection pool settings
+  connection_properties:
+    connect_timeout: 30
+    application_name: soda_dq_scanner
+    
+  # SSL Configuration (enable in production)
+  # ssl_mode: require
+  # ssl_cert: /path/to/cert.pem
+  # ssl_key: /path/to/key.pem
+  # ssl_root_cert: /path/to/ca.pem

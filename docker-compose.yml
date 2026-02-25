@@ -1,0 +1,279 @@
+version: '3.8'
+
+# ============================================
+# KYC Data Quality Monitoring Platform
+# Production-Ready Docker Compose Configuration
+# ============================================
+
+services:
+  # ==========================================
+  # PostgreSQL Database Service
+  # ==========================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: kyc-postgres
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kyc_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-kyc_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kyc_secure_pass_2024}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+      - ./database/backups:/backups
+    
+    networks:
+      - kyc-network
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kyc_admin} -d ${POSTGRES_DB:-kyc_platform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c max_connections=200
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=1MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c max_worker_processes=4
+      -c max_parallel_workers_per_gather=2
+      -c max_parallel_workers=4
+      -c log_statement=all
+      -c log_duration=on
+      -c log_line_prefix='%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+  # ==========================================
+  # Soda Core Scanner Service
+  # ==========================================
+  soda:
+    build:
+      context: ./soda
+      dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: 3.11
+    
+    container_name: kyc-soda-scanner
+    restart: "no"  # Run on-demand via docker-compose run
+    
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-kyc_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-kyc_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kyc_secure_pass_2024}
+      SODA_SCAN_SCHEDULE: ${SODA_SCAN_SCHEDULE:-0 */6 * * *}  # Every 6 hours
+      PYTHONUNBUFFERED: 1
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    
+    volumes:
+      - ./soda/config:/app/config:ro
+      - ./soda/checks:/app/checks:ro
+      - ./soda/scripts:/app/scripts:ro
+      - soda-results:/app/results
+      - soda-logs:/app/logs
+    
+    networks:
+      - kyc-network
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+    
+    command: ["python", "/app/scripts/run_scan.py"]
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # ==========================================
+  # Streamlit Dashboard Service
+  # ==========================================
+  streamlit:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: 3.11
+    
+    container_name: kyc-streamlit-dashboard
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-kyc_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-kyc_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kyc_secure_pass_2024}
+      STREAMLIT_SERVER_PORT: 8501
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+      STREAMLIT_THEME_BASE: "dark"
+      STREAMLIT_THEME_PRIMARY_COLOR: "#FF4B4B"
+      STREAMLIT_THEME_BACKGROUND_COLOR: "#0E1117"
+      STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR: "#262730"
+      STREAMLIT_THEME_TEXT_COLOR: "#FAFAFA"
+      STREAMLIT_THEME_FONT: "sans serif"
+      APP_TITLE: "KYC Data Quality Monitor"
+      APP_VERSION: "1.0.0"
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      PYTHONUNBUFFERED: 1
+    
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    
+    volumes:
+      - ./dashboard/app:/app:ro
+    
+    networks:
+      - kyc-network
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # ==========================================
+  # Scheduled Soda Scanner (Optional - Cron)
+  # ==========================================
+  soda-scheduler:
+    build:
+      context: ./soda
+      dockerfile: Dockerfile
+    
+    container_name: kyc-soda-scheduler
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-kyc_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-kyc_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kyc_secure_pass_2024}
+      PYTHONUNBUFFERED: 1
+    
+    volumes:
+      - ./soda/config:/app/config:ro
+      - ./soda/checks:/app/checks:ro
+      - ./soda/scripts:/app/scripts:ro
+      - soda-results:/app/results
+      - soda-logs:/app/logs
+    
+    networks:
+      - kyc-network
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+    
+    command: ["sh", "-c", "while true; do python /app/scripts/run_scan.py; sleep 21600; done"]
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+# ==========================================
+# Networks
+# ==========================================
+networks:
+  kyc-network:
+    name: kyc-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# ==========================================
+# Volumes
+# ==========================================
+volumes:
+  postgres-data:
+    name: kyc-postgres-data
+    driver: local
+  
+  soda-results:
+    name: kyc-soda-results
+    driver: local
+  
+  soda-logs:
+    name: kyc-soda-logs
+    driver: local
+
+# ==========================================
+# Usage Instructions
+# ==========================================
+# 
+# 1. Start all services:
+#    docker-compose up -d
+# 
+# 2. View logs:
+#    docker-compose logs -f streamlit
+# 
+# 3. Run Soda scan manually:
+#    docker-compose run --rm soda
+# 
+# 4. Access dashboard:
+#    http://localhost:8501
+# 
+# 5. Stop all services:
+#    docker-compose down
+# 
+# 6. Remove all data (CAUTION):
+#    docker-compose down -v
+# 
+# 7. Rebuild services:
+#    docker-compose up -d --build
+# 
+# 8. Database access:
+#    docker-compose exec postgres psql -U kyc_admin -d kyc_platform
+# 
+# ==========================================

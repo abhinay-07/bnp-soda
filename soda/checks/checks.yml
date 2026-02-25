@@ -1,0 +1,428 @@
+# ============================================
+# Enterprise-Grade SodaCL Checks
+# KYC Data Quality Platform
+# ============================================
+
+# ============================================
+# 1. USERS TABLE - Comprehensive Checks
+# ============================================
+
+checks for users:
+  # ==========================================
+  # Schema Validation
+  # ==========================================
+  - schema:
+      name: Validate users table schema
+      warn:
+        when required column missing: 
+          - user_id
+          - first_name
+          - last_name
+          - email
+          - date_of_birth
+          - country_code
+          - account_status
+          - risk_level
+          - created_at
+      fail:
+        when wrong column type:
+          user_id: varchar
+          email: varchar
+          date_of_birth: date
+          created_at: timestamp
+  
+  # ==========================================
+  # Row Count & Volume Checks
+  # ==========================================
+  - row_count > 0:
+      name: Users table must not be empty
+  
+  - row_count:
+      name: Monitor user table volume
+      warn:
+        when < 10
+      fail:
+        when < 1
+  
+  - change for row_count:
+      name: Detect unusual volume changes
+      warn:
+        when > 50%
+      fail:
+        when > 100%
+  
+  # ==========================================
+  # Missing/Null Value Checks
+  # ==========================================
+  - missing_count(user_id) = 0:
+      name: User ID must not be null
+  
+  - missing_count(first_name) = 0:
+      name: First name must not be null
+  
+  - missing_count(last_name) = 0:
+      name: Last name must not be null
+  
+  - missing_count(email) = 0:
+      name: Email must not be null
+  
+  - missing_count(date_of_birth) = 0:
+      name: Date of birth must not be null
+  
+  - missing_count(country_code) = 0:
+      name: Country code must not be null
+  
+  - missing_percent(phone) < 20%:
+      name: Phone number should be provided for most users
+  
+  # ==========================================
+  # Duplicate Checks
+  # ==========================================
+  - duplicate_count(user_id) = 0:
+      name: User ID must be unique
+  
+  - duplicate_count(email) = 0:
+      name: Email must be unique
+  
+  # ==========================================
+  # Format Validation Checks
+  # ==========================================
+  - invalid_count(email) = 0:
+      name: Email must be in valid format
+      valid format: email
+  
+  - invalid_count(email) = 0:
+      name: Email must match standard pattern
+      valid regex: '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+  
+  - invalid_count(phone) = 0:
+      name: Phone must be in valid international format
+      valid regex: '^\+?[0-9]{10,15}$'
+      filter: phone IS NOT NULL
+  
+  - invalid_count(country_code) = 0:
+      name: Country code must be valid ISO 3166-1 alpha-3
+      valid regex: '^[A-Z]{3}$'
+  
+  - invalid_count(postal_code) = 0:
+      name: Postal code format validation
+      valid regex: '^[A-Z0-9\s\-]{3,10}$'
+      filter: postal_code IS NOT NULL
+  
+  # ==========================================
+  # Business Rule Checks
+  # ==========================================
+  - failed rows:
+      name: Users must be at least 18 years old
+      fail condition: |
+        DATE_PART('year', AGE(CURRENT_DATE, date_of_birth)) < 18
+  
+  - invalid_count(account_status) = 0:
+      name: Account status must be valid
+      valid values:
+        - PENDING
+        - ACTIVE
+        - SUSPENDED
+        - CLOSED
+  
+  - invalid_count(risk_level) = 0:
+      name: Risk level must be valid
+      valid values:
+        - LOW
+        - MEDIUM
+        - HIGH
+        - UNKNOWN
+  
+  # ==========================================
+  # Data Quality Thresholds
+  # ==========================================
+  - invalid_percent(email) < 5%:
+      name: Email validity should be above 95%
+  
+  - missing_percent(phone) < 10%:
+      name: Phone number completeness should be above 90%
+  
+  # ==========================================
+  # Freshness Checks
+  # ==========================================
+  - freshness(created_at) < 7d:
+      name: Recent user registrations detected
+  
+  - max(created_at):
+      name: Latest user registration timestamp
+      warn:
+        when < 30d ago
+  
+  # ==========================================
+  # Referential Integrity
+  # ==========================================
+  - failed rows:
+      name: Users should have at least one verified document
+      fail condition: |
+        user_id NOT IN (
+          SELECT DISTINCT user_id 
+          FROM kyc_docs 
+          WHERE verification_status = 'VERIFIED'
+        )
+        AND account_status = 'ACTIVE'
+  
+  # ==========================================
+  # Fraud Detection
+  # ==========================================
+  - failed rows:
+      name: High-risk users with suspicious patterns
+      fail condition: |
+        risk_level = 'HIGH' AND account_status = 'ACTIVE'
+  
+  - failed rows:
+      name: Users from high-risk countries
+      fail condition: |
+        country_code IN ('RUS', 'PRK', 'IRN', 'SYR')
+  
+  - failed rows:
+      name: Active users must have at least one document
+      fail condition: |
+        account_status = 'ACTIVE'
+        AND user_id NOT IN (SELECT DISTINCT user_id FROM kyc_docs)
+  
+  - failed rows:
+      name: Document coverage should be high for active users
+      fail condition: |
+        account_status IN ('ACTIVE', 'PENDING')
+        AND (
+          SELECT COUNT(*) 
+          FROM kyc_docs kd 
+          WHERE kd.user_id = users.user_id 
+          AND kd.verification_status = 'VERIFIED'
+        ) = 0
+  
+  - failed rows:
+      name: Detect potential identity theft - multiple accounts same email domain
+      fail condition: |
+        (
+          SELECT COUNT(*) 
+          FROM users u2 
+          WHERE SPLIT_PART(u2.email, '@', 2) = SPLIT_PART(users.email, '@', 2)
+        ) > 10
+  
+  - failed rows:
+      name: Suspicious pattern - recently created high-risk accounts
+      fail condition: |
+        risk_level = 'HIGH'
+        AND created_at > CURRENT_TIMESTAMP - INTERVAL '7 days'
+        AND account_status = 'ACTIVE'
+  
+  # ==========================================
+  # Compliance Checks
+  # ==========================================
+  - failed rows:
+      name: GDPR Compliance - Users must have consent timestamp
+      fail condition: |
+        created_at < CURRENT_TIMESTAMP - INTERVAL '90 days'
+        AND last_verified_at IS NULL
+  
+  - failed rows:
+      name: KYC refresh required for old accounts
+      fail condition: |
+        last_verified_at < CURRENT_TIMESTAMP - INTERVAL '365 days'
+        AND account_status = 'ACTIVE'
+  
+  # ==========================================
+  # Anomaly Detection
+  # ==========================================
+  - anomaly score for row_count < default:
+      name: Detect unusual user registration patterns
+  
+  - change for row_count:
+      name: Alert on sudden user count changes
+      warn:
+        when > 30%
+      fail:
+        when > 50%
+  
+  # ==========================================
+  # Distribution Checks
+  # ==========================================
+  - values in (account_status) must exist in users (account_status):
+      name: Account status distribution check
+  
+  - avg(DATE_PART('year', AGE(CURRENT_DATE, date_of_birth))) between 18 and 100:
+      name: Average user age must be reasonable
+
+# ============================================
+# 2. KYC_DOCS TABLE - Comprehensive Checks
+# ============================================
+
+checks for kyc_docs:
+  # ==========================================
+  # Schema Validation
+  # ==========================================
+  - schema:
+      name: Validate kyc_docs table schema
+      warn:
+        when required column missing:
+          - doc_id
+          - user_id
+          - document_type
+          - document_number
+          - issue_date
+          - expiry_date
+          - verification_status
+          - created_at
+      fail:
+        when wrong column type:
+          doc_id: uuid
+          user_id: varchar
+          document_type: varchar
+          issue_date: date
+          expiry_date: date
+  
+  # ==========================================
+  # Row Count & Volume Checks
+  # ==========================================
+  - row_count > 0:
+      name: Documents table must not be empty
+  
+  - row_count:
+      name: Monitor document table volume
+      warn:
+        when < 5
+      fail:
+        when < 1
+  
+  # ==========================================
+  # Missing/Null Value Checks
+  # ==========================================
+  - missing_count(doc_id) = 0:
+      name: Document ID must not be null
+  
+  - missing_count(user_id) = 0:
+      name: User ID in documents must not be null
+  
+  - missing_count(document_type) = 0:
+      name: Document type must not be null
+  
+  - missing_count(document_number) = 0:
+      name: Document number must not be null
+  
+  - missing_count(issue_date) = 0:
+      name: Issue date must not be null
+  
+  - missing_count(expiry_date) = 0:
+      name: Expiry date must not be null
+  
+  # ==========================================
+  # Duplicate Checks
+  # ==========================================
+  - duplicate_count(document_number) = 0:
+      name: Document number must be unique
+  
+  # ==========================================
+  # Referential Integrity
+  # ==========================================
+  - values in (user_id) must exist in users (user_id):
+      name: All documents must reference valid users
+  
+  # ==========================================
+  # Business Rule Checks
+  # ==========================================
+  - invalid_count(document_type) = 0:
+      name: Document type must be valid
+      valid values:
+        - PASSPORT
+        - NATIONAL_ID
+        - DRIVERS_LICENSE
+        - RESIDENCE_PERMIT
+        - OTHER
+  
+  - invalid_count(verification_status) = 0:
+      name: Verification status must be valid
+      valid values:
+        - PENDING
+        - VERIFIED
+        - REJECTED
+        - EXPIRED
+  
+  - failed rows:
+      name: Expiry date must be after issue date
+      fail condition: |
+        expiry_date <= issue_date
+  
+  - failed rows:
+      name: Documents must not be expired
+      fail condition: |
+        expiry_date < CURRENT_DATE
+        AND verification_status = 'VERIFIED'
+  
+  - failed rows:
+      name: Documents expiring within 90 days
+      fail condition: |
+        expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '90 days'
+        AND verification_status = 'VERIFIED'
+  
+  - invalid_count(issuing_country) = 0:
+      name: Issuing country must be valid ISO code
+      valid regex: '^[A-Z]{3}$'
+  
+  # ==========================================
+  # Freshness Checks
+  # ==========================================
+  - freshness(created_at) < 7d:
+      name: Recent document uploads detected
+  
+  # ==========================================
+  # Distribution Checks
+  # ==========================================
+  - values in (document_type) must exist in kyc_docs (document_type):
+      name: Document type distribution check
+  
+  # ==========================================
+  # Fraud Detection
+  # ==========================================
+  - failed rows:
+      name: Orphaned documents not allowed
+      fail condition: |
+        user_id NOT IN (SELECT user_id FROM users)
+  
+  - failed rows:
+      name: Detect duplicate document numbers across users
+      fail condition: |
+        document_number IN (
+          SELECT document_number 
+          FROM kyc_docs 
+          GROUP BY document_number 
+          HAVING COUNT(DISTINCT user_id) > 1
+        )
+  
+  # ==========================================
+  # Anomaly Detection
+  # ==========================================
+  - anomaly score for row_count < default:
+      name: Detect unusual document upload patterns
+  
+  - change for row_count:
+      name: Alert on sudden document count changes
+      warn:
+        when > 30%
+
+# ============================================
+# CONFIGURATION NOTES
+# ============================================
+# 
+# 1. All checks are designed to catch real data quality issues
+# 2. Fail conditions will cause CI/CD pipeline to fail
+# 3. Warn conditions generate alerts but don't block
+# 4. Failed rows are captured with sample data for analysis
+# 5. Checks cover:
+#    - Schema validation
+#    - Null/missing values
+#    - Duplicates
+#    - Format validation (regex)
+#    - Business rules
+#    - Referential integrity
+#    - Freshness
+#    - Anomaly detection
+#    - Fraud patterns
+#    - Compliance requirements
+# 
+# ============================================
