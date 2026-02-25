@@ -1,0 +1,59 @@
+# Simple deployment configuration
+# Use this when pulling the pre-built image
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: kyc-postgres
+    environment:
+      POSTGRES_DB: kyc_platform
+      POSTGRES_USER: kyc_admin
+      POSTGRES_PASSWORD: secure_password_2024
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kyc_admin -d kyc_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kyc-network
+
+  # Complete SODA-V3 Application (Dashboard + Scanner)
+  soda-app:
+    image: abhinaymanikanti/bnp-soda:latest  # Your Docker Hub image
+    container_name: kyc-soda-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: kyc_platform
+      DB_USER: kyc_admin
+      DB_PASSWORD: secure_password_2024
+    ports:
+      - "8501:8501"
+    volumes:
+      - soda-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - kyc-network
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  soda-logs:
+
+networks:
+  kyc-network:
+    driver: bridge

@@ -1,0 +1,57 @@
+# Git files
+.git
+.gitignore
+.github
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.pytest_cache
+.coverage
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# Documentation (include in image but not needed for build)
+# COMPLETE_PROJECT_GUIDE.md
+# SETUP_COMMANDS.md
+
+# Logs
+*.log
+logs/
+
+# Database data (not needed in image)
+postgres-data/
+*.sqlite
+*.sqlite3
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Environment files (sensitive)
+.env
